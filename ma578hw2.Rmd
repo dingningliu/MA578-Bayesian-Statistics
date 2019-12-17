@@ -1,0 +1,31 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+#(a)
+```{r}
+theta_a <- rgamma(1000,238,10)
+y_a <- rpois(1000, theta_a)
+print(sort(y_a)[c(25,976)])
+```
+#(b)
+```{r}
+theta_b <- rgamma(1000,238,5.716e12)
+y_b <- rpois(1000, theta_b*8e11)
+print(sort(y_b)[c(25,976)])
+```
+#(c)
+```{r}
+theta_c <- rgamma(1000,6919,10)
+y_c <- rpois(1000, theta_c)
+print(sort(y_c)[c(25,976)])
+```
+#(d)
+```{r}
+theta_d <- rgamma(1000,6919,5.716e12)
+y_d <- rpois(1000, theta_d*8e11)
+print(sort(y_d)[c(25,976)])
+```

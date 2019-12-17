@@ -1,0 +1,187 @@
+```{r}
+library(bayesplot)
+library(rstan)
+```
+
+### 14.1(a)
+```{r}
+#prepare the data
+y.1 <- c (5.0, 13.0, 7.2, 6.8, 12.8, 5.8, 9.5, 6.0, 3.8, 14.3, 1.8, 6.9, 4.7, 9.5)
+y.2 <- c (0.9, 12.9, 2.6, 3.5, 26.6, 1.5, 13.0, 8.8, 19.5, 2.5, 9.0, 13.1, 3.6, 6.9)
+y.3 <- c (14.3, 6.9, 7.6, 9.8, 2.6, 43.5, 4.9, 3.5, 4.8, 5.6, 3.5, 3.9, 6.7)
+
+firstfloor.1 <- c(0,0,0,0,0,1,0,0,0,1,0,0,0,0)
+firstfloor.2 <- c(1,0,0,1,0,0,0,0,0,1,0,0,0,1)
+firstfloor.3 <- c(0,1,0,1,0,0,0,0,0,0,0,0,0)
+county <- rep(c('Blue Earth', 'Clay', 'Goodhue'),c(length(y.1),length(y.2),length(y.3)))
+
+
+library(dummies)
+county <- dummies::dummy(county, sep = '.')
+
+y <- c(y.1, y.2, y.3)
+x <- cbind(c(firstfloor.1, firstfloor.2, firstfloor.3), county)
+
+colnames(x) <- c('firstfloor', 'Blue Earth', 'Clay', 'Goodhue')
+```
+
+
+```{r}
+source("/Users/liudingning/Desktop/MAcourses/MA 578/bslm.R")
+fit_1 <- bslm_fit(log(y), x )
+data.frame(coef = fit_1$coef, se = sqrt(diag(chol2inv(fit_1$C))))
+summary(lm(log(y) ~ x - 1))
+```
+
+
+```{r}
+sims <- bslm_sample(log(y), x)
+monitor(sims)
+mcmc_trace(sims)
+mcmc_acf(sims)
+mcmc_dens_overlay(sims)
+mcmc_hist(sims)
+```
+
+#### Nontechnical summary
+Mean Measruement for Blue Earth (basement) = $exp(\beta_2) = 7.0717$ 
+Mean Measruement for Blue Earth (first floor) = $exp(\beta_2 + \beta_1) = 5.0927$ 
+Mean Measruement for Clay (basement) = $exp(\beta_3) = 6.5293$ 
+Mean Measruement for Clay (first floor) = $exp(\beta_3 + \beta_1) = 4.7021$ 
+Mean Measruement for Goodhue (basement) = $exp(\beta_4) = 6.8087$ 
+Mean Measruement for Goodhue (first floor) = $exp(\beta_4 + \beta_1) = 4.9033$ 
+
+```{r}
+#model checking by posterior predictive
+ns <- dim(sims)[1]
+n <- length(y)
+p <- ncol(x)
+y_rep <- matrix(nrow = ns, ncol = n)
+for (is in 1:ns)
+  y_rep[is,] <- rnorm(n, x %*% sims[is, 1, 1:p], sqrt(sims[is, 1, p + 1]))
+```
+
+```{r}
+#visualize posterior predictive
+boxplot(exp(y_rep), outline = F); points(y, pch = 19, col = "red")
+```
+
+### 14.1(b)
+```{r}
+#basement
+y_bluearth_basement <- rnorm(1000, sims[, 1, 2], sqrt(sims[, 1, 5]))
+y_bluearth_basement <- exp(y_bluearth_basement)
+hist(y_bluearth_basement[y_bluearth_basement<40], xlab='radon measurement (new house)', main = 'Histogram of measurement in Blue Earth County with basement',  breaks = 20)
+print (round(quantile(y_bluearth_basement,c(.025,0.975)),4))
+
+```
+```{r}
+#first floor
+y_bluearth_fl <- rnorm(1000, sims[, 1, 2]+sims[, 1, 1], sqrt(sims[, 1, 5]))
+y_bluearth_fl <- exp(y_bluearth_fl)
+hist(y_bluearth_fl[y_bluearth_fl<40], xlab='radon measurement (new house)', main = 'Histogram of measurement in Blue Earth County with first floor',  breaks = 20)
+print (round(quantile(y_bluearth_fl,c(.025,0.975)),4))
+```
+
+### 14.12
+```{r}
+bodymass <- c(31.2, 24.0, 19.8, 18.2, 9.6, 6.5, 3.2)
+metabolicrate <- c(1113, 982, 908, 842, 626, 430, 281)
+bodysurface <- c(10750,8805,7500,7662,5286,3724,2423)
+J <- 7
+y <- log(metabolicrate)
+x <- log(bodymass)
+```
+
+Assume that log body mass and log metabolic rate have independent 'errors' of equal
+variance $\sigma^2$. From previous model, we have $\begin{bmatrix} log(x_i) \\ log(y_i))\end{bmatrix} \sim N(\begin{bmatrix} \mu_i \\ \nu_i\end{bmatrix}, \sigma^2I_2)$ which is also $\begin{bmatrix} log(x_i) \\ log(y_i))\end{bmatrix} \sim N(\begin{bmatrix} \mu_i \\ a+b\mu_i\end{bmatrix}, \sigma^2I_2)$
+Assume the noninformative prior is $P(a.b)\propto 1$
+
+#### (b)
+```{r}
+ns = 1000
+slm <- stan_model('/Users/liudingning/Desktop/MAcourses/MA 578/hw/hw6/slm.stan')
+slmm <- sampling(slm, iter = ns, chains = 4,data = c("J", "y","x"))
+```
+```{r}
+monitor(slmm)
+sims <- as.array(slmm)
+mcmc_trace(sims)
+mcmc_acf(sims)
+mcmc_dens_overlay(sims)
+mcmc_hist(sims)
+```
+```{r}
+b = as.vector(sims[,,12])
+hist(b) 
+quantile(b,c(0.025,0.975))
+```
+    
+    From the result above, we can summary that when log(mass) increases by 1, log(meta-rate) increases by about 0.6, the metabolicrate increase by about exp(0.6)=1.82.
+
+#### (c)
+```{r}
+ns = 1000
+slm2 <- stan_model('/Users/liudingning/Desktop/MAcourses/MA 578/hw/hw6/slm2.stan')
+slmm2 <- sampling(slm2, iter = ns, chains = 4,data = c("J", "y","x"))
+```
+
+```{r}
+monitor(slmm2)
+sims2 <- as.array(slmm2)
+mcmc_trace(sims2)
+mcmc_acf(sims2)
+mcmc_dens_overlay(sims2)
+mcmc_hist(sims2)
+```
+
+```{r}
+b2 = as.vector(sims2[,,12])
+hist(b2) 
+quantile(b2,c(0.025,0.975))
+```
+
+    The inference of b does not change much, though the variance of b's posterior increased a little bit.
+    
+### 14.13
+```{r}
+z <- log(bodysurface)
+ns = 1000
+lm3 <- stan_model('/Users/liudingning/Desktop/MAcourses/MA 578/hw/hw6/lm3.stan')
+lmm3 <- sampling(lm3, iter = ns, chains = 4,data = c("J", "y","x","z"))
+```
+
+```{r}
+monitor(lmm3)
+sims3 <- as.array(lmm3)
+mcmc_trace(sims3)
+mcmc_acf(sims3)
+mcmc_dens_overlay(sims3)
+mcmc_hist(sims3)
+```
+
+$log(meta-rate) = 0.29 + 0.18*log(mass) + 0.66*log(surface)$
+
+Due to collinearity, we can see the posterior distributions of the parameters have larger variance.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,357 @@
+---
+output:
+  html_document: default
+  word_document: default
+---
+```{r}
+mcmc_array <- function (ns, nchains = 1, params) {
+  nparams <- length(params)
+  array(dim = c(ns, nchains, nparams),
+        dimnames = list(iterations = NULL,
+                        chains = paste0("chain", 1:nchains),
+                        parameters = params))
+}
+
+plot_trace <- function (x, ...)
+  plot(x, type = "l", col = "gray", xlab = "iteration", ...)
+plot_hist <- function (x, ...)
+  hist(x, col = "gray", border = "white", main = "", ...)
+```
+
+### 11.2
+```{r}
+bioassay <- read.csv('/Users/liudingning/Desktop/MAcourses/MA 578/bioassay.csv', header = TRUE, comment = "#")
+
+
+ns <- 10000 # number of mcmc samples
+#params <- c(paste0("theta", 1:J), "alpha", "beta", "lp__") 
+params <- c("alpha", "beta", "lp__")
+sims <- mcmc_array(ns, params = params)   #simulation 1 chain
+
+#inverse logit function
+ilogit <- function (x) 1 / (1 + exp(-x))    #get theta
+
+lprior <- function(a, b) { log(1) }
+lhood1 <- function (a, b) { # log-likelihood
+  p <- ilogit(a + b * bioassay$logdose)
+  sum(bioassay$deaths * log(p) + (bioassay$n - bioassay$deaths) * log(1 - p))
+}
+```
+
+```{r}
+#init
+gb <- glm(cbind(deaths, n - deaths) ~ logdose, family=binomial, data=bioassay)
+summary(gb) # check posterior mode and standard deviation to define grid range
+alpha <- coef(gb)[1];  beta <- coef(gb)[2]
+
+sigma_a <- summary(gb)$coefficients[1,2] # randow walk sigma for alpha
+sigma_b <- summary(gb)$coefficients[2,2] # random walk sigma for beta
+
+```
+
+```{r}
+#sims[1,1,] <- c(alpha, beta, lhood1(alpha, beta))
+# [theta | alpha, beta, y, n, x]
+#theta <- ilogit(alpha + beta * bioassay$logdose)
+# iterate
+for (is in 1:ns) {
+  # [ alpha | theta, beta, y, n, x: randow walk ]
+  alpha_c <- rnorm(1, alpha, sigma_a)
+  beta_c <- rnorm(1, beta, sigma_b)
+  theta_c <- ilogit(alpha_c + beta_c * bioassay$logdose)
+  
+  if (theta_c[1] <1  & theta_c[2]<1 & theta_c[3]<1 & theta_c[4]<1 & theta_c[1] >0  & theta_c[2]>0 & theta_c[3]>0 & theta_c[4]>0) {                                       #computelog acceptance ratio
+    log_r <- lhood1(alpha_c, beta_c) - lhood1(alpha, beta)
+    if (log_r >= 0 || log(runif(1)) <= log_r) { # accept?
+      alpha <- alpha_c
+      beta <- beta_c}
+  }
+
+  # [ log posterior ]
+  lp <- lhood1(alpha, beta) 
+
+  sims[is, 1, ] <- c(alpha, beta, lp)
+}
+
+```
+
+```{r}
+r <- 8000:10000
+op <- par(mfrow = c(3, 3))
+plot_trace(sims[r, , 1], ylab = expression(alpha))
+plot_trace(sims[r, , 2], ylab = expression(beta))
+plot_trace(sims[r, , 3], ylab = "log-posterior")
+acf(sims[r, , 1], main = expression(alpha))
+acf(sims[r, , 2], main = expression(beta))
+acf(sims[r, , 3], main = "log-posterior")
+plot_hist(sims[r, , 1], xlab = expression(alpha))
+plot_hist(sims[r, , 2], xlab = expression(beta))
+plot_hist(sims[r, , 3], xlab = "log-posterior")
+par(op)
+
+```
+
+### 11.3
+```{r}
+quality <- data.frame('Machine'=c(1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,4,4,4,4,4,5,5,5,5,5,6,6,6,6,6), 'Measurements'=c(83, 92 ,92, 46, 67, 117, 109, 114, 104, 87, 101, 93, 92, 86, 67, 105, 119, 116, 102, 116, 79, 97, 103, 79, 92, 57, 92, 104, 77, 100))
+
+
+# sufficient stats
+J <- length(unique(quality$Machine))
+n <- sum(quality$Measurements)
+
+ns <- 10000 # number of mcmc samples
+params <- c(paste0("theta", 1:J), "mu", "sigma2", "tau2", "lp__") 
+sims <- mcmc_array(ns, params = params)   #simulation 1 chain
+```
+
+#### Initial
+```{r}
+# init
+#we can choose overdispersed starting points for each parameter theta_j by simply taking random points from the data yij from group j. We obtain 10 starting points for the simulations by drawing tehta_j independently in this way for each group. 
+theta.0 <- sapply(1:6, function(x) sample(quality$Measurements[quality$Machine==x], 10, replace=TRUE))
+#We also need starting points for μ, which can be taken as the average of the starting theta_j.
+mu.0 <- apply(theta.0, 1,mean) 
+
+#For sigma or tau as they can be drawn as the first steps in the Gibbs sampler.
+#1.Draw from conditional posterior of tau2 by variance function
+tau_hat2 <- function(theta) {
+  mu <- mean(theta)
+  tau.2 <- ( 1/(J-1) ) * sum((theta - mu)^2)
+  return(tau.2)
+} 
+
+#2.Draw from conditional posterior of sigma2 by variance function
+sigma_hat2 <- function(theta) {
+  sigma.hat.2 <-  sapply(1:6, function(x) (quality$Measurements[quality$Machine==x] - theta[x])^2)  
+  sigma.hat.2 <-  (1/n) * sum(unlist(sigma.hat.2))
+  return(sigma.hat.2)
+}
+
+#3.Draw from conditional posterior of mu
+mu_hat <- function(theta) {
+  mean(theta)
+} 
+
+```
+
+#### Conditional probablity
+```{r}
+#P(tau2|theta, mu, sigma, y) = Inv-x2 (J-1, tau_hat2)
+tau2.post <- function(theta) {
+  tau.2 <- tau_hat2(theta) 
+  tau.cond <- (J - 1) * (tau.2)/rchisq(1,J-1)
+  return(tau.cond)
+}
+
+#P(sigma2|theta, mu, tau, y) = Inv-x2 (n, sigma_hat2)
+sigma2.post <-  function(theta) {
+  sigma2.hat <- tau2.post(theta) 
+  sigma2.post <-  (n) * (sigma2.hat)/rchisq(1,n)
+  return(sigma2.post)
+  }
+
+#P(mu|theta, sigma, tau, y) = N(mu, tau2/J)
+mu.post <- function(theta,tau2) {
+  mu.hat <- mu_hat(theta)
+  rnorm(1,mu.hat,sqrt(tau2/J))
+}
+
+#P(theta|mu, tau, sigma, y) = N(theta_hatj, V_thetaj)
+theta.hat.j <- function(j,mu,sigma2,tau2) {
+  y.bar.j <- mean(quality$Measurements[quality$Machine==j])
+  n.j <- length(quality$Measurements[quality$Machine==j])
+  ( (1/tau2) * mu + (n.j/sigma2) * y.bar.j  ) / ( (1/tau2) + (n.j/sigma2)  )
+} 
+
+V.theta.hat.j <- function(j,mu,sigma2,tau2) {
+  n.j <- length(quality$Measurements[quality$Machine==j])
+  ( 1 ) / ( (1/tau2) + (n.j/sigma2) )
+} 
+
+theta.post <- function(mu,sigma2,tau2) {
+  theta <- NULL 
+  for (j in 1:J) {
+    t.hat <- theta.hat.j(j,mu,sigma2,tau2)   
+    v.t.hat <- V.theta.hat.j(j,mu,sigma2,tau2)
+    theta[j] <- rnorm(1,t.hat,sqrt(v.t.hat)) 
+  }
+  return(theta)
+}
+
+```
+
+```{r}
+c=1
+mcmc_array <- function (ns, nchains = c, params) {
+  nparams <- length(params)
+  array(dim = c(ns, nchains, nparams),
+        dimnames = list(iterations = NULL,
+                        chains = paste0("chain", 1:nchains),
+                        parameters = params))
+}
+ns = 1000
+params <- c(paste0("theta", 1:J), "tau2", "sigma2", "mu") 
+sims <- mcmc_array(ns, params = params)   #simulation 1 chain
+
+sims[1, 1:c, 1:6] <- theta.0[1:c, 1:6]
+sims[1, 1:c, 7] <- tau2.post(sims[1,1:c,1:6])
+sims[1, 1:c, 8] <- sigma2.post(sims[1,1:c,1:6])
+sims[1, 1:c, 9] <- mu.post(sims[1,1:c,1:6],sims[1,1:c,7])
+
+
+for (is in 2:ns) {
+  sims[is, 1:c, 1:6] <- theta.post(sims[is-1,1:c,9],sims[is-1,1:c,8],sims[is-1,1:c,7])
+  sims[is, 1:c, 7] <- tau2.post(sims[is,1:c,1:6])
+  sims[is, 1:c, 8] <- sigma2.post(sims[is,1:c,1:6])
+  sims[is, 1:c, 9] <- mu.post(sims[is,1:c,1:6],sims[is,1:c,7])
+}
+
+```
+
+#### pooled, seperate model
+```{r}
+y.bar.dot.dot <-  mean(quality$Measurements)
+var.pooled <-  sum( (quality$Measurements[quality$Machine==6] - 
+                            mean(quality$Measurements))^2 )/( length(quality$Measurements) - 1)
+s.theta.pooled.6<- rnorm(ns, y.bar.dot.dot, sqrt(var.pooled))
+y.bar.6.dot <-  mean(quality$Measurements[quality$Machine==6]) 
+var.sep.6 <-  sum( (quality$Measurements[quality$Machine==6] - 
+                            mean(quality$Measurements[quality$Machine==6]))^2 ) / 
+                        ( length(quality$Measurements[quality$Machine==6]) - 1)
+s.theta.sep.6 <- rnorm(ns, y.bar.6.dot, sqrt(var.sep.6))
+
+s.theta.pooled.6.mean<- rnorm(ns, y.bar.dot.dot, sqrt(var.pooled/4))
+s.theta.sep.6.mean <- rnorm(ns, y.bar.6.dot, sqrt(var.sep.6/4))
+
+```
+
+
+#### (i) the posterior distribution of the mean of the quality measurements of the sixth machine
+```{r}
+plot(density(sims[1:ns, 1, 9]), col="red", 
+     xlab="Mean Measurement", 
+     ylab="Density", 
+     main="Predictive distribution of Measurement of 6th Machine")
+lines(density(s.theta.pooled.6.mean), col="blue")
+lines(density(s.theta.sep.6.mean), col="green")
+legend("topleft",col = c("red","blue", "green"),
+       legend=c("Hierarchical","pooled", "separated"),
+       lty = c(1,1,1)) 
+
+```
+
+#### (ii) the predictive distribution for another quality measurement of the sixth machine
+```{r}
+plot(density(sims[1:ns, 1, 6]), col="red", 
+     xlab="Mean Measure", 
+     ylab="Density", 
+     main="Predictive distribution of Measure of 6")
+lines(density(s.theta.pooled.6), col="blue")
+lines(density(s.theta.sep.6), col="green")
+legend("topleft",col = c("red","blue", "green"),
+       legend=c("Hierarchical","pooled", "separated"),
+       lty = c(1,1,1)) 
+
+```
+
+
+
+#### (iii) the posterior distribution of the mean of the quality measurements of the seventh machine.
+```{r}
+plot(density(sims[1:ns, 1, 9]), col="red", xlab="Mean Measurement", 
+    ylab="Density", main="Posterior distribution of Measurement of 7th Machine")
+lines(density(s.theta.pooled.6.mean), col="blue")
+lines(density(s.theta.sep.6.mean), col="green")
+legend("topleft",col = c("red","blue", "green"), 
+       legend=c("Hierarchical","pooled", "separated"), 
+       lty = c(1,1,1)) 
+```
+
+### 3
+```{r}
+y <- c(13, 52, 6, 40, 10, 7, 66, 10, 10, 14, 16, 4, 65, 5, 11, 10, 15, 5, 76, 56, 88, 24, 51, 4, 40, 8, 18, 5, 16, 50, 40, 1, 36, 5, 10, 91, 18, 1, 18, 6, 1, 23, 15, 18, 12, 12, 17, 3)
+
+
+ns <- 10000 # number of mcmc samples
+params <- c("sigma2", "mu","lambda", "lp__")
+sims <- mcmc_array(ns, params = params)   #simulation 1 chain
+
+
+lambda <- 0.05
+sigma_lambda <- 0.07
+
+boxcox <- function(lam) {
+  if (lam == 0) {
+    log(y)
+  } else{
+    (y^lam-1)/lam
+  }
+}
+mu <- mean(boxcox(lambda))
+```
+
+
+```{r}
+#sample directly mu, tau2
+#random walk Metropolis-Hastings sampling lambda
+rinvsquare <- function (ns, nu, nu_tau2) {1 / rgamma(ns, nu / 2, nu_tau2 / 2)}
+
+
+for (is in 1:ns) {
+  
+  # [ sigma2 | theta, mu, tau2, y ]
+  sigma2 <- rinvsquare(1, n-1, sum((boxcox(lambda) - mu) ^ 2)/(n-1))
+  
+  # [ mu | theta, sigma2, tau2, y ]
+  mu <- rnorm(1, mean(boxcox(lambda)), sqrt(sigma2 / n))
+  
+  lambda_c <- rnorm(1, lambda, sqrt(sigma_lambda))
+  
+  w1 <- boxcox(lambda)
+  wc <- boxcox(lambda_c)
+
+  log_r <- 1/(2*sigma2) * sum((w1-mu)^2 - (wc-mu)^2) + (lambda_c-lambda)*sum(log(y))
+  
+  if (log_r >= 0 || log(runif(1)) <= log_r) # accept?
+    lambda <- lambda_c
+  
+  
+  # [ log posterior ]
+  
+  lp <- -((n+1)/2)*log(sigma2)-1/(2*sigma2)*sum((boxcox(lambda)-mu)^2)+(lambda-1)*sum(log(y))
+  
+  sims[is, 1, ] <- c(sigma2,mu,lambda,lp)
+}
+r <- 8000:10000
+op <- par(mfrow = c(3, 4))
+plot_trace(sims[r, , 1], ylab = expression(sigma))
+plot_trace(sims[r, , 2], ylab = expression(mu))
+plot_trace(sims[r, , 3], ylab = expression(lambda))
+plot_trace(sims[r, , 4], ylab = expression(posterior))
+acf(sims[r, , 1], main = expression(sigma))
+acf(sims[r, , 2], main = expression(mu))
+acf(sims[r, , 3], main = expression(lambda))
+acf(sims[r, , 4], main = expression(posterior))
+plot_hist(sims[r, , 1], xlab = expression(sigma))
+plot_hist(sims[r, , 2], xlab = expression(mu))
+plot_hist(sims[r, , 3], xlab = expression(lambda))
+plot_hist(sims[r, , 4], xlab = expression(posterior))
+par(op)
+
+```
+
+```{r}
+#sigma
+quantile(sims[r, 1, 1],c(0.025,0.975))
+```
+```{r}
+#mu
+quantile(sims[r, 1, 2],c(0.025,0.975))
+```
+
+```{r}
+#lambda
+quantile(sims[r, 1, 3],c(0.025,0.975))
+```
+

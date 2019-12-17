@@ -1,0 +1,175 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+## 2.11(a)
+```{r}
+a = -4
+b = 4
+
+y <- c(-2, -1, 0, 1.5, 2.5)
+theta <- seq(a+0.01, b-0.01, 0.01)
+
+dens_func<- function(y, theta, a, b){
+  den0 <- NULL
+  for (i in 1:length(theta)) {
+    den0 <- c(den0, prod(dcauchy(y ,theta[i], 1)))     # /Sigma( P(y_i|theta) )
+  }
+    pos_den <- den0/(b-a)                     #posterior  /Sigma(P(y_i|theta)) * P(theta)
+    return(pos_den)
+}
+
+
+density_unorm <- dens_func(y,theta, a, b) 
+density_norm <- density_unorm/sum(density_unorm)
+plot(theta, density_norm, type = 'l', xlab = expression(theta), ylab = expression('Normalized '~ P(theta~"|"~y)))
+```
+## 4.1(b)
+```{r}
+f <- function(theta){
+  pi1<-0
+  for (i in 1:5) {
+    pi1 = pi1 + 2*(y[i]-theta)/(1+(y[i]-theta)^2)
+  }
+  return(pi1)
+}
+theta_mode <- round(uniroot(f, lower = -10, upper = 10)$root, 4)
+theta_mode
+```
+
+## 4.1(c)
+```{r}
+f_v <- function(y, theta){
+  pi2 <- 0
+  for (i in 1:5){
+    pi2 = pi2 + 2*((y[i]-theta)^2-1)/((1+(y[i]-theta)^2)^2)
+  }
+  return(pi2)
+}
+theta_mode_v <- -1/f_v(y, theta_mode)
+
+#get density of theta from posterior
+density_mode <- dnorm(theta, theta_mode, sqrt(theta_mode_v))
+#normalize
+density_mode <- density_mode/sum(density_mode)
+
+par(mfrow=c(1,2))
+plot(theta, density_mode, type = 'l', xlab = expression(theta), ylab = expression( P(theta~"|"~y)),main = 'Normal Approximation Density')
+plot(theta, density_norm, type = 'l', xlab = expression(theta), ylab = expression('Normalized '~ P(theta~"|"~y)),main = 'Exact Density')
+```
+
+
+## 5.13
+```{r}
+#data
+residential_bike <- data.frame(bicycles=c(16,9,10,13,19,20,18,17,35,55),other_vehicles=c(58,90,48,57,103,57,86,112,273,64))
+
+#data processing
+residential_bike$totalnumberofvehicles <- residential_bike$bicycles + residential_bike$other_vehicles
+residential_bike$theta <- (residential_bike$bicycles)/(residential_bike$totalnumberofvehicles)
+
+```
+
+## (b)
+```{r}
+#sample hyperparameters from their marginal posterior distribution
+m <- 100
+alpha <- seq(0, 8, length = m)[-1]
+beta <- seq(0, 30, length = m)[-1]
+
+y <- residential_bike$bicycles
+n <- residential_bike$totalnumberofvehicles
+
+#P(a,b |y)
+lj <- matrix(nrow=m-1, ncol=m-1)
+log_pab <- function(a, b){
+ for (i in 1:m-1){
+   for (j in 1:m-1) {
+      lj[i,j] = (-5/2)*log(a[i]+b[j]) + 10*(lgamma(a[i]+b[j])-lgamma(a[i])-lgamma(b[j])) + sum(lgamma(y+a[i])+lgamma(n-y+b[j])-lgamma(a[i]+n+b[j]))
+   }
+ }
+  return(lj)
+}
+
+lab <- log_pab(alpha, beta)
+p_ab <- exp(lab)
+contour(alpha, beta, p_ab, xlim = c(0,8), ylim = c(0,30), xlab='alpha', ylab='beta')
+
+
+```
+
+
+```{r}
+#sample theta_j from its conditional posterior distribution 
+# theta_j|alphg,beta,y_j ~ Beta(y_j+alpha, n_j-y_j+beta)
+pa <- rowSums(p_ab) 
+m=99
+ind_ab <- matrix(1:(m^2), nrow = m) 
+sample_ab <- function (ns) { 
+  is <- sapply(sample.int(m ^ 2, ns, replace = TRUE, prob = p_ab), 
+               function (ind) which(ind_ab == ind, arr = TRUE)) 
+  cbind(alpha[is[1,]], beta[is[2,]]) 
+} 
+ns <- 1000 
+ab_s <- sample_ab(ns) 
+theta_s <- matrix(nrow = ns, ncol = nrow(residential_bike)) 
+ytilde_s <- matrix(nrow = ns, ncol = nrow(residential_bike)) 
+
+
+for (j in 1:nrow(residential_bike)) { 
+  theta_s[,j] <- rbeta(ns, ab_s[,1] + y[j], ab_s[,2] + n[j] - y[j])
+  ytilde_s[,j] <- rbinom(ns, n[j], theta_s[,j])
+} 
+
+t <- seq(0, 1, length = m+1 )[-1] 
+theta_p <- matrix(nrow = m, ncol = nrow(residential_bike))
+
+for (j in 1:nrow(residential_bike)) { 
+  for (i in 1:m) { 
+    theta_p[i, j] <- sum(p_ab * outer(alpha, beta, function (alpha, beta)  dbeta(t[i], alpha + y[j], beta + n[j] - y[j])))
+  } 
+}
+
+
+```
+
+
+```{r}
+# plot each theta_j marginally
+j <- sample.int(nrow(residential_bike), 1) 
+tlj <- dbeta(t, 1 + y[j], 1 + n[j] - y[j]) # likelihood 
+tcpj <- dbeta(t, alpha + y[j], beta + n[j] - y[j]) # cond posterior 
+# predictive proportions: 
+hist(ytilde_s[,j] / n[j], border = "white", col = "gray", prob = TRUE, xlim = c(0, 1), ylim = c(0, max(tlj, tcpj, theta_p[,j])), xlab = expression(theta[j]), ylab = "density")
+#main = paste("[ j = ", j, "] x1 / N = ", y[j], "/", n[j]
+lines(t, tlj, col = "blue") # likelihood 
+lines(t, tcpj, lty = 2, lwd = 2) 
+# cond posterior 
+lines(t, theta_p[,j], lwd = 2) # marginal posterior 
+abline(v = y[j] / n[j], col = "blue") 
+abline(v = sum(y) / sum(n), col = "red", lty = 2)
+
+```
+
+## (d)
+```{r}
+p <- ab_s[,1]/(ab_s[,1]+ab_s[,2]) 
+quantile(p,c(0.025,0.975))
+```
+
+## (e)
+```{r}
+theta_new <- rbeta(1000,ab_s[,1],ab_s[,2]) 
+y_new <- rbinom(1000,100,theta_new) 
+quantile(y_new,c(0.025,0.975))
+```
+
+
+
+
+
+
+
+
+
